@@ -1,76 +1,48 @@
 """
-auth.py — JWT creation / verification + password hashing
-Uses python-jose (HS256) and passlib (bcrypt).
+routers/auth.py — /auth  (register · login)
 """
 
-import os
-from datetime import datetime, timedelta, timezone
-from typing import Optional
-
-from jose import JWTError, jwt
-from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Vendor
-from schemas import TokenData
+from models   import Vendor
+from schemas  import VendorCreate, VendorOut, Token
+from auth     import hash_password, verify_password, create_access_token
 
-SECRET_KEY  = os.getenv("SECRET_KEY", "change-me-in-production-use-32-char-secret")
-ALGORITHM   = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("TOKEN_EXPIRE_MINUTES", "1440"))  # 24 h
-
-pwd_context   = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
-import bcrypt
-
-# ── Password helpers ─────────────────────────────────────────────────
-
-def hash_password(plain: str) -> str:
-    return bcrypt.hashpw(plain.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
-def verify_password(plain: str, hashed: str) -> bool:
-    try:
-        return bcrypt.checkpw(plain.encode('utf-8'), hashed.encode('utf-8'))
-    except Exception:
-        return False
-
-
-# ── Token helpers ────────────────────────────────────────────────────
-
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (
-        expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+@router.post("/register", response_model=VendorOut, status_code=201,
+             summary="Register a new vendor account")
+def register(payload: VendorCreate, db: Session = Depends(get_db)):
+    if db.query(Vendor).filter(Vendor.email == payload.email).first():
+        raise HTTPException(status_code=400, detail="Email already registered")
+    vendor = Vendor(
+        name=payload.name,
+        market=payload.market,
+        email=payload.email,
+        hashed_password=hash_password(payload.password),
     )
-    to_encode["exp"] = expire
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-
-# ── FastAPI dependency — current authenticated vendor ────────────────
-
-def get_current_vendor(
-    token: str = Depends(oauth2_scheme),
-    db:    Session = Depends(get_db),
-) -> Vendor:
-    credentials_exc = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload    = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        vendor_id: int = payload.get("sub")
-        if vendor_id is None:
-            raise credentials_exc
-        token_data = TokenData(vendor_id=int(vendor_id))
-    except JWTError:
-        raise credentials_exc
-
-    vendor = db.get(Vendor, token_data.vendor_id)
-    if vendor is None or not vendor.is_active:
-        raise credentials_exc
+    db.add(vendor)
+    db.commit()
+    db.refresh(vendor)
     return vendor
+
+
+@router.post("/login", response_model=Token,
+             summary="Login and receive a JWT access token")
+def login(
+    form: OAuth2PasswordRequestForm = Depends(),
+    db:   Session = Depends(get_db),
+):
+    vendor = db.query(Vendor).filter(Vendor.email == form.username).first()
+    if not vendor or not verify_password(form.password, vendor.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = create_access_token({"sub": str(vendor.id)})
+    return {"access_token": token, "token_type": "bearer"}
