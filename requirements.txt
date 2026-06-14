@@ -1,0 +1,33 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+sqlalchemy==2.0.35
+pydantic[email]==2.9.2
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.12
+alembic==1.13.3
+
+# Production DB (uncomment and swap DATABASE_URL env var)
+# psycopg2-binary==2.9.9
+
+# Optional Redis cache
+# redis==5.1.0
+requests
+customtkinter
+matplotlib
+pillow
+
+numpy
+pandas
+scikit-learn
+joblib
+statsmodels
+torch
+opencv-python-headless
+ultralytics
+faster-whisper
+edge-tts
+
+
+sounddevice
+python-dotenv
